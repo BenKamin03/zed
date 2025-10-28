@@ -79,6 +79,7 @@ pub enum EditPredictionProvider {
     Supermaven,
     Zed,
     Codestral,
+    LanguageModel,
 }
 
 impl EditPredictionProvider {
@@ -88,7 +89,8 @@ impl EditPredictionProvider {
             EditPredictionProvider::None
             | EditPredictionProvider::Copilot
             | EditPredictionProvider::Supermaven
-            | EditPredictionProvider::Codestral => false,
+            | EditPredictionProvider::Codestral
+            | EditPredictionProvider::LanguageModel => false,
         }
     }
 }
@@ -108,9 +110,24 @@ pub struct EditPredictionSettingsContent {
     pub copilot: Option<CopilotSettingsContent>,
     /// Settings specific to Codestral.
     pub codestral: Option<CodestralSettingsContent>,
+    /// Settings specific to the generic language model edit prediction provider.
+    pub language_model: Option<LanguageModelEditPredictionSettingsContent>,
     /// Whether edit predictions are enabled in the assistant prompt editor.
     /// This has no effect if globally disabled.
     pub enabled_in_text_threads: Option<bool>,
+}
+
+#[skip_serializing_none]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
+pub struct LanguageModelEditPredictionSettingsContent {
+    /// Preferred model in the format "provider_id/model_id", e.g. "ollama/llama3.1:8b".
+    pub model: Option<String>,
+    /// Sampling temperature to use.
+    pub temperature: Option<f32>,
+    /// Maximum number of tokens to generate.
+    pub max_tokens: Option<u32>,
+    /// Stop sequences the model should not cross.
+    pub stop: Option<Vec<String>>,
 }
 
 #[skip_serializing_none]

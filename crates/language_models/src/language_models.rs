@@ -11,6 +11,7 @@ mod api_key;
 pub mod provider;
 mod settings;
 pub mod ui;
+pub mod edit_prediction;
 
 use crate::provider::anthropic::AnthropicLanguageModelProvider;
 use crate::provider::bedrock::BedrockLanguageModelProvider;
@@ -26,6 +27,7 @@ use crate::provider::open_router::OpenRouterLanguageModelProvider;
 use crate::provider::vercel::VercelLanguageModelProvider;
 use crate::provider::x_ai::XAiLanguageModelProvider;
 pub use crate::settings::*;
+pub use edit_prediction::LanguageModelEditPredictionProvider;
 
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
     crate::settings::init_settings(cx);

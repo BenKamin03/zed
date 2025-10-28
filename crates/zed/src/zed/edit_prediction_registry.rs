@@ -6,7 +6,7 @@ use editor::Editor;
 use feature_flags::FeatureFlagAppExt;
 use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, WeakEntity};
 use language::language_settings::{EditPredictionProvider, all_language_settings};
-use language_models::MistralLanguageModelProvider;
+use language_models::{LanguageModelEditPredictionProvider, MistralLanguageModelProvider};
 use settings::SettingsStore;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use supermaven::{Supermaven, SupermavenCompletionProvider};
@@ -200,6 +200,10 @@ fn assign_edit_prediction_provider(
         EditPredictionProvider::Codestral => {
             let http_client = client.http_client();
             let provider = cx.new(|_| CodestralCompletionProvider::new(http_client));
+            editor.set_edit_prediction_provider(Some(provider), window, cx);
+        }
+        EditPredictionProvider::LanguageModel => {
+            let provider = cx.new(|_| LanguageModelEditPredictionProvider::new());
             editor.set_edit_prediction_provider(Some(provider), window, cx);
         }
         EditPredictionProvider::Zed => {

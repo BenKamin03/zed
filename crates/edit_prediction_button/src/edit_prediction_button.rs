@@ -287,6 +287,32 @@ impl Render for EditPredictionButton {
                 )
             }
 
+            EditPredictionProvider::LanguageModel => {
+                let enabled = self.editor_enabled.unwrap_or(true);
+                let icon = if enabled {
+                    IconName::ZedPredict
+                } else {
+                    IconName::ZedPredictDisabled
+                };
+                let this = cx.entity();
+
+                div().child(
+                    PopoverMenu::new("language_model")
+                        .menu(move |window, cx| {
+                            Some(this.update(cx, |this, cx| {
+                                this.build_language_model_context_menu(window, cx)
+                            }))
+                        })
+                        .anchor(Corner::BottomRight)
+                        .trigger_with_tooltip(
+                            IconButton::new("language-model-icon", icon)
+                                .shape(IconButtonShape::Square),
+                            move |_window, cx| Tooltip::for_action("Language Model", &ToggleMenu, cx),
+                        )
+                        .with_handle(self.popover_menu_handle.clone()),
+                )
+            }
+
             EditPredictionProvider::Zed => {
                 let enabled = self.editor_enabled.unwrap_or(true);
 
@@ -781,6 +807,16 @@ impl EditPredictionButton {
                 .entry("Configure Codestral API Key", None, move |window, cx| {
                     window.dispatch_action(zed_actions::agent::OpenSettings.boxed_clone(), cx);
                 })
+        })
+    }
+
+    fn build_language_model_context_menu(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ContextMenu> {
+        ContextMenu::build(window, cx, |menu, window, cx| {
+            self.build_language_settings_menu(menu, window, cx)
         })
     }
 

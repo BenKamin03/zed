@@ -36,6 +36,8 @@ gpui_tokio.workspace = true
 http_client.workspace = true
 language.workspace = true
 language_model.workspace = true
+edit_prediction.workspace = true
+edit_prediction_context.workspace = true
 lmstudio = { workspace = true, features = ["schemars"] }
 log.workspace = true
 menu.workspace = true

@@ -8884,6 +8884,8 @@ dependencies = [
  "copilot",
  "credentials_provider",
  "deepseek",
+ "edit_prediction",
+ "edit_prediction_context",
  "editor",
  "fs",
  "futures 0.3.31",

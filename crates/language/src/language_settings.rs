@@ -379,6 +379,8 @@ pub struct EditPredictionSettings {
     pub copilot: CopilotSettings,
     /// Settings specific to Codestral.
     pub codestral: CodestralSettings,
+    /// Settings specific to the generic language model provider.
+    pub language_model: LanguageModelProviderSettings,
     /// Whether edit predictions are enabled in the assistant panel.
     /// This setting has no effect if globally disabled.
     pub enabled_in_text_threads: bool,
@@ -422,6 +424,18 @@ pub struct CodestralSettings {
     pub max_tokens: Option<u32>,
     /// Custom API URL to use for Codestral.
     pub api_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LanguageModelProviderSettings {
+    /// Preferred model in the format "provider_id/model_id", e.g. "ollama/llama3.1:8b".
+    pub model: Option<String>,
+    /// Sampling temperature to use.
+    pub temperature: Option<f32>,
+    /// Maximum number of tokens to generate.
+    pub max_tokens: Option<u32>,
+    /// Stop sequences to pass to the model.
+    pub stop: Option<Vec<String>>,
 }
 
 impl AllLanguageSettings {
@@ -641,6 +655,16 @@ impl settings::Settings for AllLanguageSettings {
             api_url: codestral.api_url,
         };
 
+        let language_model_settings = edit_predictions
+            .language_model
+            .unwrap_or_default();
+        let language_model_settings = LanguageModelProviderSettings {
+            model: language_model_settings.model,
+            temperature: language_model_settings.temperature,
+            max_tokens: language_model_settings.max_tokens,
+            stop: language_model_settings.stop,
+        };
+
         let enabled_in_text_threads = edit_predictions.enabled_in_text_threads.unwrap();
 
         let mut file_types: FxHashMap<Arc<str>, GlobSet> = FxHashMap::default();
@@ -675,6 +699,7 @@ impl settings::Settings for AllLanguageSettings {
                 mode: edit_predictions_mode,
                 copilot: copilot_settings,
                 codestral: codestral_settings,
+                language_model: language_model_settings,
                 enabled_in_text_threads,
             },
             defaults: default_language_settings,
