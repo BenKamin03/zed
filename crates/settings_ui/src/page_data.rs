@@ -5705,6 +5705,143 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
                     metadata: None,
                     files: USER,
                 }),
+                SettingsPageItem::SectionHeader("Edit Predictions"),
+                SettingsPageItem::DynamicItem(DynamicItem {
+                    discriminant: SettingItem {
+                        title: "Provider",
+                        description: "Which provider supplies edit predictions.",
+                        field: Box::new(SettingField {
+                            json_path: Some("edit_prediction_provider"),
+                            pick: |settings_content| {
+                                settings_content
+                                    .project
+                                    .all_languages
+                                    .features
+                                    .as_ref()?
+                                    .edit_prediction_provider
+                                    .as_ref()
+                            },
+                            write: |settings_content, value| {
+                                settings_content
+                                    .project
+                                    .all_languages
+                                    .features
+                                    .get_or_insert_default()
+                                    .edit_prediction_provider = value;
+                            },
+                        }),
+                        metadata: None,
+                        files: USER,
+                    },
+                    pick_discriminant: |settings_content| {
+                        let provider = settings_content
+                            .project
+                            .all_languages
+                            .features
+                            .as_ref()?
+                            .edit_prediction_provider
+                            .as_ref()?;
+                        let index = match *provider {
+                            settings::EditPredictionProvider::None => 0,
+                            settings::EditPredictionProvider::Copilot => 1,
+                            settings::EditPredictionProvider::Supermaven => 2,
+                            settings::EditPredictionProvider::Zed => 3,
+                            settings::EditPredictionProvider::Codestral => 4,
+                            settings::EditPredictionProvider::LanguageModel => 5,
+                        };
+                        Some(index)
+                    },
+                    fields: vec![
+                        // None
+                        vec![],
+                        // Copilot
+                        vec![edit_predictions_display_mode_item()],
+                        // Supermaven
+                        vec![edit_predictions_display_mode_item()],
+                        // Zed
+                        vec![edit_predictions_display_mode_item()],
+                        // Codestral
+                        vec![edit_predictions_display_mode_item()],
+                        // Language Model
+                        vec![
+                            edit_predictions_display_mode_item(),
+                            SettingItem {
+                                title: "Active Model",
+                                description: "Model used when provider is set to Custom.",
+                                field: Box::new(
+                                    SettingField::<()> {
+                                        json_path: Some(LM_MODEL_JSON_PATH),
+                                        pick: |_settings_content| -> Option<&()> { None },
+                                        write: |_settings_content, _value: Option<()>| {},
+                                    }
+                                    .unimplemented(),
+                                ),
+                                metadata: None,
+                                files: USER,
+                            },
+                            SettingItem {
+                                title: "Temperature",
+                                description: "Sampling temperature for the language model provider.",
+                                field: Box::new(SettingField {
+                                    json_path: Some(LM_TEMPERATURE_JSON_PATH),
+                                    pick: |settings_content| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .as_ref()?
+                                            .language_model
+                                            .as_ref()?
+                                            .temperature
+                                            .as_ref()
+                                    },
+                                    write: |settings_content, value| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .get_or_insert_default()
+                                            .language_model
+                                            .get_or_insert_default()
+                                            .temperature = value;
+                                    },
+                                }),
+                                metadata: None,
+                                files: USER,
+                            },
+                            SettingItem {
+                                title: "Max Tokens",
+                                description: "Maximum number of tokens to generate for predictions.",
+                                field: Box::new(SettingField {
+                                    json_path: Some(LM_MAX_TOKENS_JSON_PATH),
+                                    pick: |settings_content| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .as_ref()?
+                                            .language_model
+                                            .as_ref()?
+                                            .max_tokens
+                                            .as_ref()
+                                    },
+                                    write: |settings_content, value| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .get_or_insert_default()
+                                            .language_model
+                                            .get_or_insert_default()
+                                            .max_tokens = value;
+                                    },
+                                }),
+                                metadata: None,
+                                files: USER,
+                            },
+                        ],
+                    ],
+                }),
             ],
         },
         SettingsPage {
@@ -5752,12 +5889,116 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     ]
 }
 
-const LANGUAGES_SECTION_HEADER: &'static str = "Languages";
+const EDIT_PREDICTIONS_MODE_JSON_PATH: &str = "edit_predictions.mode";
+const LM_MODEL_JSON_PATH: &str = "edit_predictions.language_model.model";
+const LM_TEMPERATURE_JSON_PATH: &str = "edit_predictions.language_model.temperature";
+const LM_MAX_TOKENS_JSON_PATH: &str = "edit_predictions.language_model.max_tokens";
+
+fn edit_predictions_display_mode_item() -> SettingItem {
+    SettingItem {
+        title: "Display Mode",
+        description: "When to show edit predictions inline.",
+        field: Box::new(SettingField {
+            json_path: Some(EDIT_PREDICTIONS_MODE_JSON_PATH),
+            pick: |settings_content| {
+                settings_content
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .as_ref()?
+                    .mode
+                    .as_ref()
+            },
+            write: |settings_content, value| {
+                settings_content
+                    .project
+                    .all_languages
+                    .edit_predictions
+                    .get_or_insert_default()
+                    .mode = value;
+            },
+        }),
+        metadata: None,
+        files: USER,
+    }
+}
+
+const LANGUAGES_SECTION_HEADER: &str = "Languages";
 
 fn current_language() -> Option<SharedString> {
     sub_page_stack().iter().find_map(|page| {
         (page.section_header == LANGUAGES_SECTION_HEADER).then(|| page.link.title.clone())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::prelude::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn find_edit_predictions_dynamic<'a>(pages: &'a [SettingsPage]) -> Option<&'a DynamicItem> {
+        for page in pages {
+            let mut saw_header = false;
+            for item in &page.items {
+                match item {
+                    SettingsPageItem::SectionHeader(title) => {
+                        saw_header = *title == "Edit Predictions";
+                    }
+                    SettingsPageItem::DynamicItem(dynamic) if saw_header => {
+                        if dynamic.discriminant.title == "Provider" {
+                            return Some(dynamic);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    #[gpui::test]
+    fn edit_predictions_dynamic_fields_mapping(cx: &mut App) {
+        let _g = serial_guard();
+        let pages = settings_data(cx);
+        let dynamic = find_edit_predictions_dynamic(&pages)
+            .expect("Edit Predictions dynamic item with Provider discriminant should exist");
+
+        // Helper to build minimal SettingsContent with a given provider
+        fn with_provider(provider: settings::EditPredictionProvider) -> settings::SettingsContent {
+            let mut content = settings::SettingsContent::default();
+            content
+                .project
+                .all_languages
+                .features
+                .get_or_insert_default()
+                .edit_prediction_provider = Some(provider);
+            content
+        }
+
+        // Mapping indices expected by pick_discriminant and expected field counts
+        let cases: &[(settings::EditPredictionProvider, usize, usize)] = &[
+            (settings::EditPredictionProvider::None, 0, 0),
+            (settings::EditPredictionProvider::Copilot, 1, 1),
+            (settings::EditPredictionProvider::Supermaven, 2, 1),
+            (settings::EditPredictionProvider::Zed, 3, 1),
+            (settings::EditPredictionProvider::Codestral, 4, 1),
+            (settings::EditPredictionProvider::LanguageModel, 5, 4),
+        ];
+
+        for (provider, expected_index, expected_len) in cases.iter().copied() {
+            let content = with_provider(provider);
+            let index = (dynamic.pick_discriminant)(&content)
+                .expect("pick_discriminant should return Some(index)");
+            assert_eq!(index, expected_index, "unexpected discriminant index for {:?}", provider);
+            assert_eq!(dynamic.fields[index].len(), expected_len, "unexpected fields length for {:?}", provider);
+        }
+    }
 }
 
 fn language_settings_field<T>(

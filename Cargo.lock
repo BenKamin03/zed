@@ -15440,6 +15440,7 @@ dependencies = [
  "gpui",
  "heck 0.5.0",
  "language",
+ "language_model",
  "log",
  "menu",
  "node_runtime",

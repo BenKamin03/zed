@@ -402,4 +402,78 @@ impl EditPredictionProvider for LanguageModelEditPredictionProvider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::prelude::*;
+    use language::Buffer;
+    use language::language_settings::{EditPredictionSettings, LanguageModelProviderSettings};
+    use language_model::{fake_provider::FakeLanguageModel, init_settings as init_lm_settings};
+    use std::sync::{Mutex, OnceLock};
+
+    fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn set_user_language_model_settings(
+        cx: &mut App,
+        apply: impl FnOnce(&mut settings::SettingsContent, &App),
+    ) {
+        SettingsStore::global(cx).update_settings_file(<dyn fs::Fs>::global(cx), apply);
+    }
+
+    #[gpui::test]
+    async fn is_enabled_true_with_default_model_and_authenticated(cx: &mut App) {
+        let _g = serial_guard();
+        // Initialize registry with a fake provider and default model
+        init_lm_settings(cx);
+        language_model::LanguageModelRegistry::test(cx);
+
+        // Minimal buffer entity; contents are irrelevant for is_enabled()
+        let buffer = cx.new(|cx| Buffer::local("", cx));
+
+        let provider_entity = cx.new(|_| LanguageModelEditPredictionProvider::new());
+        let enabled = provider_entity.update(cx, |this, cx| {
+            this.is_enabled(&buffer, language::Anchor::MIN, cx)
+        });
+
+        assert!(enabled, "provider should be enabled when a default model exists and a provider is authenticated");
+
+        // Reset registry to a clean default to avoid impacting unrelated tests
+        init_lm_settings(cx);
+    }
+
+    #[gpui::test]
+    async fn request_includes_guard_stops_and_temperature(cx: &mut App) {
+        let _g = serial_guard();
+        // Build settings locally without touching global SettingsStore
+        let settings = EditPredictionSettings {
+            language_model: LanguageModelProviderSettings {
+                model: None,
+                temperature: Some(0.7),
+                max_tokens: None,
+                stop: Some(vec!["X".into(), "[PREFIX]".into()]),
+            },
+            ..Default::default()
+        };
+
+        let req = LanguageModelEditPredictionProvider::build_request(
+            "prefix text",
+            "suffix text",
+            &[],
+            &settings,
+        );
+
+        // Temperature passes through
+        assert_eq!(req.temperature, Some(0.7));
+
+        // Stop sequences contain guards, user-provided values, and are deduped
+        let stops: std::collections::HashSet<_> = req.stop.iter().cloned().collect();
+        for s in ["[PREFIX]", "[/PREFIX]", "[SUFFIX]", "[/SUFFIX]", "X"] {
+            assert!(stops.contains(s), "missing stop token: {s}");
+        }
+    }
+}
+
 

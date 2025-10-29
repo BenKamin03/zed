@@ -38,7 +38,8 @@ use util::{ResultExt as _, paths::PathStyle, rel_path::RelPath};
 use workspace::{AppState, OpenOptions, OpenVisible, Workspace, client_side_decorations};
 use zed_actions::{OpenSettings, OpenSettingsAt};
 
-use crate::components::{SettingsInputField, font_picker, icon_theme_picker, theme_picker};
+use crate::components::{SettingsInputField, font_picker, icon_theme_picker, language_model_picker, theme_picker};
+use language_model::{ConfiguredModel, LanguageModelRegistry};
 
 const NAVBAR_CONTAINER_TAB_INDEX: isize = 0;
 const NAVBAR_GROUP_TAB_INDEX: isize = 1;
@@ -409,6 +410,96 @@ fn init_renderers(cx: &mut App) {
                 })
                 .into_any_element()
         })
+        .add_renderer::<UnimplementedSettingField>(
+            |settings_window, item, field: SettingField<UnimplementedSettingField>, file, _metadata, window, cx| {
+                // Determine currently configured model for edit predictions, or fall back to default
+                let store = SettingsStore::global(cx);
+                let configured = store
+                    .get_value_from_file(file.to_settings(), |settings| {
+                        settings
+                            .project
+                            .all_languages
+                            .edit_predictions
+                            .as_ref()?
+                            .language_model
+                            .as_ref()?
+                            .model
+                            .as_ref()
+                    })
+                    .1
+                    .map(ToString::to_string);
+
+                let active = configured.and_then(|config| {
+                    let registry = LanguageModelRegistry::read_global(cx);
+                    if let Some((provider_str, model_str)) = config.split_once('/') {
+                        let provider_id = language_model::LanguageModelProviderId::from(
+                            provider_str.trim().to_string(),
+                        );
+                        let model_id = language_model::LanguageModelId::from(model_str.trim().to_string());
+                        match registry.provider(&provider_id) {
+                            Some(provider) => {
+                                let model = provider
+                                    .provided_models(cx)
+                                    .into_iter()
+                                    .find(|m| m.id() == model_id);
+                                match model {
+                                    Some(model) => Some(ConfiguredModel { provider, model }),
+                                    None => {
+                                        log::warn!(
+                                            "Configured edit prediction model not found: provider={}, model={}",
+                                            provider_id,
+                                            model_id.0
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                            None => {
+                                log::warn!(
+                                    "Configured edit prediction provider not found: {}",
+                                    provider_id
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        log::warn!(
+                            "Invalid edit prediction model format (expected 'provider/model'): {}",
+                            config
+                        );
+                        None
+                    }
+                });
+
+                // Fallback to default model if none explicitly set
+                let active = active.or_else(|| LanguageModelRegistry::read_global(cx).default_model());
+
+                let file_for_update = file.clone();
+                let control = language_model_picker(
+                    active,
+                    move |model, cx| {
+                        let provider_id = model.provider_id().to_string();
+                        let model_id = model.id().0.clone();
+                        let value = format!("{}/{}", provider_id, model_id);
+                        update_settings_file(file_for_update.clone(), field.json_path, cx, move |settings, _| {
+                            settings
+                                .project
+                                .all_languages
+                                .edit_predictions
+                                .get_or_insert_default()
+                                .language_model
+                                .get_or_insert_default()
+                                .model = Some(value.clone());
+                        })
+                        .log_err();
+                    },
+                    window,
+                    cx,
+                );
+
+                render_settings_item(settings_window, item, file, control, window, cx)
+            },
+        )
         .add_basic_renderer::<bool>(render_toggle_button)
         .add_basic_renderer::<String>(render_text_field)
         .add_basic_renderer::<SharedString>(render_text_field)
@@ -485,6 +576,110 @@ fn init_renderers(cx: &mut App) {
         .add_basic_renderer::<settings::IconThemeSelectionDiscriminants>(render_dropdown)
         .add_basic_renderer::<settings::IconThemeName>(render_icon_theme_picker)
         .add_basic_renderer::<settings::BufferLineHeightDiscriminants>(render_dropdown)
+        .add_renderer::<settings::EditPredictionsMode>(
+            |settings_window, item, field, file, _metadata, _window, cx| {
+                let (_, value) = SettingsStore::global(cx)
+                    .get_value_from_file(file.to_settings(), field.pick);
+                let current_label: SharedString = match value.copied() {
+                    Some(settings::EditPredictionsMode::Eager) => "Eager".into(),
+                    Some(settings::EditPredictionsMode::Subtle) => "Subtle".into(),
+                    None => "Select".into(),
+                };
+
+                let file_for_menu = file.clone();
+                let field_for_menu = field;
+                let control = PopoverMenu::new("edit-predictions-mode-picker")
+                    .trigger(render_picker_trigger_button(
+                        "edit_predictions_mode_picker_trigger".into(),
+                        current_label,
+                    ))
+                    .menu(move |window, cx| {
+                        let file_for_menu = file_for_menu.clone();
+                        let field_for_menu = field_for_menu;
+                        Some(ContextMenu::build(window, cx, move |mut menu, _window, _cx| {
+                            let entries: &[(SharedString, settings::EditPredictionsMode)] = &[
+                                ("Eager".into(), settings::EditPredictionsMode::Eager),
+                                ("Subtle".into(), settings::EditPredictionsMode::Subtle),
+                            ];
+                            for (text, mode) in entries.iter().cloned() {
+                                let file_for_entry = file_for_menu.clone();
+                                menu = menu.entry(text, None, move |_window, cx| {
+                                    update_settings_file(
+                                        file_for_entry.clone(),
+                                        field_for_menu.json_path,
+                                        cx,
+                                        move |settings, _| (field_for_menu.write)(settings, Some(mode)),
+                                    )
+                                    .log_err();
+                                });
+                            }
+                            menu
+                        }))
+                    })
+                    .anchor(gpui::Corner::TopLeft)
+                    .offset(gpui::Point { x: px(0.0), y: px(2.0) })
+                    .with_handle(ui::PopoverMenuHandle::default())
+                    .into_any_element();
+
+                render_settings_item(settings_window, item, file, control, _window, cx)
+            },
+        )
+        .add_renderer::<settings::EditPredictionProvider>(
+            |settings_window, item, field, file, _metadata, _window, cx| {
+                let (_, value) = SettingsStore::global(cx)
+                    .get_value_from_file(file.to_settings(), field.pick);
+                let label: SharedString = match value.copied() {
+                    Some(settings::EditPredictionProvider::None) => "None".into(),
+                    Some(settings::EditPredictionProvider::Copilot) => "Copilot".into(),
+                    Some(settings::EditPredictionProvider::Supermaven) => "Supermaven".into(),
+                    Some(settings::EditPredictionProvider::Zed) => "Zed".into(),
+                    Some(settings::EditPredictionProvider::Codestral) => "Codestral".into(),
+                    Some(settings::EditPredictionProvider::LanguageModel) => "Custom".into(),
+                    None => "Select".into(),
+                };
+
+                let file_for_menu = file.clone();
+                let field_for_menu = field;
+                let control = PopoverMenu::new("edit-prediction-provider-picker")
+                    .trigger(render_picker_trigger_button(
+                        "edit_prediction_provider_picker_trigger".into(),
+                        label,
+                    ))
+                    .menu(move |window, cx| {
+                        let file_for_menu = file_for_menu.clone();
+                        let field_for_menu = field_for_menu;
+                        Some(ContextMenu::build(window, cx, move |mut menu, _window, _cx| {
+                            let entries: &[(SharedString, settings::EditPredictionProvider)] = &[
+                                ("None".into(), settings::EditPredictionProvider::None),
+                                ("Copilot".into(), settings::EditPredictionProvider::Copilot),
+                                ("Supermaven".into(), settings::EditPredictionProvider::Supermaven),
+                                ("Zed".into(), settings::EditPredictionProvider::Zed),
+                                ("Codestral".into(), settings::EditPredictionProvider::Codestral),
+                                ("Custom".into(), settings::EditPredictionProvider::LanguageModel),
+                            ];
+                            for (text, provider) in entries.iter().cloned() {
+                                let file_for_entry = file_for_menu.clone();
+                                menu = menu.entry(text, None, move |_window, cx| {
+                                    update_settings_file(
+                                        file_for_entry.clone(),
+                                        field_for_menu.json_path,
+                                        cx,
+                                        move |settings, _| (field_for_menu.write)(settings, Some(provider)),
+                                    )
+                                    .log_err();
+                                });
+                            }
+                            menu
+                        }))
+                    })
+                    .anchor(gpui::Corner::TopLeft)
+                    .offset(gpui::Point { x: px(0.0), y: px(2.0) })
+                    .with_handle(ui::PopoverMenuHandle::default())
+                    .into_any_element();
+
+                render_settings_item(settings_window, item, file, control, _window, cx)
+            },
+        )
         .add_basic_renderer::<settings::AutosaveSettingDiscriminants>(render_dropdown)
         .add_basic_renderer::<settings::WorkingDirectoryDiscriminants>(render_dropdown)
         .add_basic_renderer::<settings::MaybeDiscriminants>(render_dropdown)
