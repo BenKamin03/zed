@@ -556,6 +556,12 @@ pub trait LanguageModel: Send + Sync {
         LanguageModelToolSchemaFormat::JsonSchema
     }
 
+    /// Whether this model supports native infill (fill-in-the-middle) requests.
+    /// Defaults to false; providers can override when they have a native infill API.
+    fn supports_infill(&self) -> bool {
+        false
+    }
+
     fn max_token_count(&self) -> u64;
     /// Returns the maximum token count for this model in burn mode (If `supports_burn_mode` is `false` this returns `None`)
     fn max_token_count_in_burn_mode(&self) -> Option<u64> {

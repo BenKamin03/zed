@@ -558,6 +558,7 @@ impl ExampleInstance {
                 tools: Vec::new(),
                 tool_choice: None,
                 stop: Vec::new(),
+                infill: None,
                 thinking_allowed: true,
             };
 

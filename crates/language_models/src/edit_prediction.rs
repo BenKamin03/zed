@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use log::{debug, error};
+use log::{debug, error, info};
 use ::edit_prediction::{Direction, EditPrediction, EditPredictionProvider};
 use futures::StreamExt;
 use gpui::{App, Context, Entity, Task};
@@ -12,6 +12,7 @@ use language::{Anchor, Buffer, BufferSnapshot, ToOffset, ToPoint};
 use language_model::{LanguageModel, LanguageModelId, LanguageModelProviderId, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role, SelectedModel};
 use language::language_settings::{all_language_settings, EditPredictionSettings};
 use edit_prediction_context::{EditPredictionExcerpt, EditPredictionExcerptOptions};
+use std::collections::{HashMap, VecDeque};
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(150);
 const INLINE_SYSTEM_PROMPT: &str = include_str!(
@@ -38,11 +39,29 @@ pub struct LanguageModelEditPredictionProvider {
     pending_request: Option<Task<Result<()>>>,
     current_completion: Option<CurrentCompletion>,
     last_model_id: Option<String>,
+    // Recent cross-file snippets: last N merged areas with their file path and row range
+    recent_snippets: VecDeque<RecentSnippet>,
+    // Track last seen full text per buffer entity to compute diffs incrementally
+    last_seen_text_by_buffer: HashMap<gpui::EntityId, String>,
+}
+
+#[derive(Clone)]
+struct RecentSnippet {
+    file_path: String,
+    start_row: u32,
+    end_row: u32,
+    text: String,
 }
 
 impl LanguageModelEditPredictionProvider {
     pub fn new() -> Self {
-        Self { pending_request: None, current_completion: None, last_model_id: None }
+        Self {
+            pending_request: None,
+            current_completion: None,
+            last_model_id: None,
+            recent_snippets: VecDeque::new(),
+            last_seen_text_by_buffer: HashMap::new(),
+        }
     }
 
     fn resolve_model(cx: &App) -> Option<Arc<dyn LanguageModel>> {
@@ -106,6 +125,11 @@ impl LanguageModelEditPredictionProvider {
             )
         };
 
+        info!(
+            "LM EditPred: user_message ({} bytes)",
+            user_message.len(),
+        );
+
         LanguageModelRequest {
             messages: vec![
                 LanguageModelRequestMessage {
@@ -121,6 +145,7 @@ impl LanguageModelEditPredictionProvider {
             ],
             stop,
             temperature,
+            infill: Some(!suffix.trim().is_empty()),
             thinking_allowed: false,
             ..Default::default()
         }
@@ -151,6 +176,118 @@ impl EditPredictionProvider for LanguageModelEditPredictionProvider {
         cx: &mut Context<Self>,
     ) {
         let snapshot = buffer.read(cx).snapshot();
+
+        // Update recent edits ring buffer by diffing last seen text for this buffer
+        let buffer_id = buffer.entity_id();
+        let new_text = snapshot.text();
+        let old_text = self
+            .last_seen_text_by_buffer
+            .get(&buffer_id)
+            .cloned()
+            .unwrap_or_default();
+        if old_text != new_text {
+            let file_path = buffer
+                .read(cx)
+                .file()
+                .map(|f| f.full_path(cx).to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("buffer_{}", buffer_id));
+
+            // Use line-based diff to gather changed new-line ranges
+            let line_edits = language::line_diff(&old_text, &new_text);
+            
+            // Indices of lines in the new text
+            let mut new_lines: Vec<&str> = Vec::new();
+            let mut start = 0usize;
+            for (i, ch) in new_text.char_indices() {
+                if ch == '\n' {
+                    new_lines.push(&new_text[start..i]);
+                    start = i + 1;
+                }
+            }
+            if start <= new_text.len() {
+                new_lines.push(&new_text[start..]);
+            }
+
+            // Coalesce new row ranges (merge overlapping/adjacent ranges)
+            let mut merged: Vec<std::ops::Range<u32>> = Vec::new();
+            for (_old_rows, new_rows) in line_edits.into_iter() {
+                if new_rows.start == new_rows.end { continue; }
+                if let Some(last) = merged.last_mut() {
+                    if new_rows.start <= last.end + 1 {
+                        last.end = last.end.max(new_rows.end);
+                    } else {
+                        merged.push(new_rows.clone());
+                    }
+                } else {
+                    merged.push(new_rows.clone());
+                }
+            }
+
+            // Choose the snippet covering the cursor row if possible, else the last merged range
+            let cursor_row = cursor_position.to_point(&snapshot).row;
+            let mut chosen = None;
+            for r in merged.iter() {
+                if r.start <= cursor_row && cursor_row <= r.end { chosen = Some(r.clone()); break; }
+            }
+            let chosen = chosen.unwrap_or_else(|| merged.last().cloned().unwrap_or(0..0));
+
+            // Expand with surrounding context lines
+            const SURROUND: u32 = 3;
+            let start_row = chosen.start.saturating_sub(SURROUND);
+            let end_row = (chosen.end + SURROUND).min((new_lines.len() as u32).saturating_sub(1));
+
+            if start_row <= end_row {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    let idx = row as usize;
+                    if idx < new_lines.len() {
+                        text.push_str(new_lines[idx]);
+                        text.push('\n');
+                    }
+                }
+
+                // Merge with last snippet if same file and overlapping/adjacent ranges
+                if let Some(last) = self.recent_snippets.back_mut() {
+                    if last.file_path == file_path {
+                        let overlap = !(end_row + 1 < last.start_row || start_row > last.end_row + 1);
+                        if overlap {
+                            let merged_start = start_row.min(last.start_row);
+                            let merged_end = end_row.max(last.end_row);
+
+                            // Rebuild merged text from current new_lines
+                            let mut merged_text = String::new();
+                            for row in merged_start..=merged_end {
+                                let idx = row as usize;
+                                if idx < new_lines.len() {
+                                    merged_text.push_str(new_lines[idx]);
+                                    merged_text.push('\n');
+                                }
+                            }
+                            last.start_row = merged_start;
+                            last.end_row = merged_end;
+                            last.text = merged_text;
+                        } else {
+                            self.recent_snippets.push_back(RecentSnippet { file_path: file_path.clone(), start_row, end_row, text });
+                        }
+                    } else {
+                        self.recent_snippets.push_back(RecentSnippet { file_path: file_path.clone(), start_row, end_row, text });
+                    }
+                } else {
+                    self.recent_snippets.push_back(RecentSnippet { file_path: file_path.clone(), start_row, end_row, text });
+                }
+
+                let recent_limit: usize = all_language_settings(None, cx)
+                    .edit_predictions
+                    .language_model
+                    .recent_edits_max_snippets
+                    .unwrap() as usize;
+                while self.recent_snippets.len() > recent_limit {
+                    self.recent_snippets.pop_front();
+                }
+            }
+
+            self.last_seen_text_by_buffer.insert(buffer_id, new_text);
+        }
 
         if let Some(current) = self.current_completion.as_ref() {
             if current.interpolate(&snapshot).is_some() {
@@ -196,17 +333,61 @@ impl EditPredictionProvider for LanguageModelEditPredictionProvider {
                     .collect::<String>();
                 let settings = all_language_settings(None, cx).edit_predictions.clone();
                 let request = Self::build_request(&prefix, "", &[], &settings);
+                let attempts = all_language_settings(None, cx)
+                    .edit_predictions
+                    .language_model
+                    .empty_completion_total_attempts
+                    .unwrap()
+                    .max(1);
+
                 self.pending_request = Some(cx.spawn(async move |this, cx| {
                     if debounce { smol::Timer::after(DEBOUNCE_TIMEOUT).await; }
-                    let stream = model.stream_completion_text(request, cx).await;
-                    let Ok(mut stream) = stream else {
-                        error!("LM EditPred: failed to start stream model={}", model.telemetry_id());
-                        this.update(cx, |this, cx| { this.pending_request = None; cx.notify(); })?;
-                        return Ok(());
-                    };
                     let mut completion = String::new();
-                    while let Some(chunk) = stream.stream.next().await {
-                        match chunk { Ok(text) => completion.push_str(&text), Err(_) => break }
+                    for _ in 0..attempts {
+                        let stream = model.stream_completion_text(request.clone(), cx).await;
+                        let Ok(mut stream) = stream else {
+                            error!("LM EditPred: failed to start stream model={}", model.telemetry_id());
+                            break;
+                        };
+                        let mut generated = String::new();
+                        while let Some(chunk) = stream.stream.next().await {
+                            match chunk { Ok(text) => generated.push_str(&text), Err(_) => break }
+                        }
+                        // Sanitize markers
+                        for marker in ["[PREFIX]", "[/PREFIX]", "[SUFFIX]", "[/SUFFIX]"] {
+                            if generated.contains(marker) {
+                                generated = generated.replace(marker, "");
+                            }
+                        }
+                        // remove internal echoes of verbatim context
+                        let mut candidates: std::collections::HashSet<String> = std::collections::HashSet::new();
+                        
+                        // long tail of prefix
+                        if !prefix.is_empty() {
+                            let mut tail = String::new();
+                            let mut count = 0usize;
+                            for ch in prefix.chars().rev() {
+                                if count >= 200 { break; }
+                                tail.insert(0, ch);
+                                count += 1;
+                            }
+                            if tail.trim().len() >= 40 { candidates.insert(tail); }
+                            // long lines from prefix
+                            for line in prefix.lines() {
+                                let l = line.trim_end();
+                                if l.len() >= 40 { candidates.insert(l.to_string()); }
+                            }
+                        }
+
+                        for cand in candidates.into_iter() {
+                            if !cand.is_empty() && generated.contains(&cand) {
+                                generated = generated.replace(&cand, "");
+                            }
+                        }
+                        if !generated.trim().is_empty() {
+                            completion = generated;
+                            break;
+                        }
                     }
                     if completion.trim().is_empty() {
                         this.update(cx, |this, cx| { this.pending_request = None; cx.notify(); })?;
@@ -228,13 +409,72 @@ impl EditPredictionProvider for LanguageModelEditPredictionProvider {
             }
         };
         let excerpt_text = excerpt.text(&snapshot);
-        let body = &excerpt_text.body;
-        let cursor_in_excerpt = cursor_offset
-            .saturating_sub(excerpt.range.start)
-            .min(body.len());
-        let prefix = body[..cursor_in_excerpt].to_string();
-        let suffix = body[cursor_in_excerpt..].to_string();
-        let parent_signatures = excerpt_text.parent_signatures;
+        
+        // compute prefix/suffix using a line-centered window around the cursor
+        let settings_window_lines = all_language_settings(None, cx)
+            .edit_predictions
+            .language_model
+            .current_space_window_lines
+            .unwrap();
+
+        let window_lines: u32 = settings_window_lines;
+        let last_row = snapshot.max_point().row;
+        let total_rows = last_row.saturating_add(1);
+        let cursor_row = cursor_point.row;
+
+        let (start_row, end_row) = if total_rows > window_lines {
+            let half = window_lines / 2;
+            let min_start = 0u32;
+            let max_start = total_rows.saturating_sub(window_lines);
+            let desired_start = cursor_row.saturating_sub(half);
+            let start = desired_start.clamp(min_start, max_start);
+            let end = start.saturating_add(window_lines.saturating_sub(1));
+            (start, end)
+        } else {
+            (0, last_row)
+        };
+
+        let window_start_offset = language::Point::new(start_row, 0).to_offset(&snapshot);
+
+        let window_end_offset = if end_row < last_row {
+            language::Point::new(end_row + 1, 0).to_offset(&snapshot)
+        } else {
+            snapshot.text().len()
+        };
+
+        let prefix = snapshot
+            .text_for_range(window_start_offset.min(cursor_offset)..cursor_offset)
+            .collect::<String>();
+        let suffix = snapshot
+            .text_for_range(cursor_offset..window_end_offset.max(cursor_offset))
+            .collect::<String>();
+
+        // current buffer path to de-duplicate same-file context
+        let current_file_path = buffer
+            .read(cx)
+            .file()
+            .map(|f| f.full_path(cx).to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("buffer_{}", buffer.entity_id()));
+
+        let parent_signatures = {
+            let mut sigs = excerpt_text.parent_signatures;
+            if !self.recent_snippets.is_empty() {
+                let mut recent = String::from("Recent edits across files (latest first):\n");
+                let mut added_any = false;
+                for snippet in self.recent_snippets.iter().rev() {
+                    if snippet.file_path == current_file_path { continue; }
+                    recent.push_str(&snippet.file_path);
+                    recent.push_str(":\n");
+                    recent.push_str(&snippet.text);
+                    if !recent.ends_with('\n') { recent.push('\n'); }
+                    added_any = true;
+                }
+                if added_any {
+                    sigs.insert(0, recent);
+                }
+            }
+            sigs
+        };
 
         // Keep a small tail of the prefix to de-duplicate from model output later
         let prefix_tail: String = {
@@ -251,6 +491,12 @@ impl EditPredictionProvider for LanguageModelEditPredictionProvider {
 
         let settings = all_language_settings(None, cx).edit_predictions.clone();
         let request = Self::build_request(&prefix, &suffix, &parent_signatures, &settings);
+        let attempts = all_language_settings(None, cx)
+            .edit_predictions
+            .language_model
+            .empty_completion_total_attempts
+            .unwrap()
+            .max(1);
 
         self.pending_request = Some(cx.spawn(async move |this, cx| {
             if debounce { smol::Timer::after(DEBOUNCE_TIMEOUT).await; }
@@ -270,66 +516,114 @@ impl EditPredictionProvider for LanguageModelEditPredictionProvider {
 
             let started_at = Instant::now();
 
-            // Stream text and collect into a single completion string
-            let stream = model.stream_completion_text(request, cx).await;
-            let Ok(mut stream) = stream else {
-                error!("LM EditPred: failed to start stream model={}", model_id);
-                this.update(cx, |this, cx| { this.pending_request = None; cx.notify(); })?;
-                return Ok(());
-            };
-
+            // Attempts loop: stream text and collect until non-empty or attempts exhausted
             let mut completion = String::new();
-            while let Some(chunk) = stream.stream.next().await {
-                match chunk {
-                    Ok(text) => completion.push_str(&text),
-                    Err(e) => {
-                        error!("LM EditPred: stream error model={} err={}", model_id, e);
-                        break;
+            for _ in 0..attempts {
+                let stream = model.stream_completion_text(request.clone(), cx).await;
+                let Ok(mut stream) = stream else {
+                    error!("LM EditPred: failed to start stream model={}", model_id);
+                    break;
+                };
+                let mut generated = String::new();
+                while let Some(chunk) = stream.stream.next().await {
+                    match chunk {
+                        Ok(text) => generated.push_str(&text),
+                        Err(e) => {
+                            error!("LM EditPred: stream error model={} err={}", model_id, e);
+                            break;
+                        }
                     }
                 }
-            }
 
-            // Sanitize: strip any prompt markers
-            for marker in ["[PREFIX]", "[/PREFIX]", "[SUFFIX]", "[/SUFFIX]"] {
-                if completion.contains(marker) {
-                    completion = completion.replace(marker, "");
-                }
-            }
-
-            // Sanitize: remove any duplicate text already present at the end of prefix
-            let dedup_prefix_overlap = |prefix_tail: &str, generated: &str| -> usize {
-                // longest suffix of prefix_tail that is a prefix of generated
-                let pt_chars: Vec<char> = prefix_tail.chars().collect();
-                let g_chars: Vec<char> = generated.chars().collect();
-                let max_len = pt_chars.len().min(g_chars.len());
-                for len in (1..=max_len).rev() {
-                    if pt_chars[pt_chars.len()-len..] == g_chars[..len] {
-                        // compute byte length of that prefix in generated
-                        return g_chars[..len].iter().map(|c| c.len_utf8()).sum();
+                // Sanitize: strip any prompt markers
+                for marker in ["[PREFIX]", "[/PREFIX]", "[SUFFIX]", "[/SUFFIX]"] {
+                    if generated.contains(marker) {
+                        generated = generated.replace(marker, "");
                     }
                 }
-                0
-            };
-            let dup = dedup_prefix_overlap(&prefix_tail, &completion);
-            if dup > 0 { completion = completion[dup..].to_string(); }
 
-            // Sanitize: remove any leading overlap with provided suffix to avoid echoing
-            let common_prefix_len = |a: &str, b: &str| -> usize {
-                a.chars()
-                    .zip(b.chars())
-                    .take_while(|(x, y)| x == y)
-                    .map(|(c, _)| c.len_utf8())
-                    .sum()
-            };
-            let overlap = common_prefix_len(&completion, &suffix);
-            if overlap > 0 {
-                completion = completion[overlap..].to_string();
+                // Sanitize: remove any duplicate text already present at the end of prefix
+                let dedup_prefix_overlap = |prefix_tail: &str, generated: &str| -> usize {
+                    // longest suffix of prefix_tail that is a prefix of generated
+                    let pt_chars: Vec<char> = prefix_tail.chars().collect();
+                    let g_chars: Vec<char> = generated.chars().collect();
+                    let max_len = pt_chars.len().min(g_chars.len());
+                    for len in (1..=max_len).rev() {
+                        if pt_chars[pt_chars.len()-len..] == g_chars[..len] {
+                            // compute byte length of that prefix in generated
+                            return g_chars[..len].iter().map(|c| c.len_utf8()).sum();
+                        }
+                    }
+                    0
+                };
+                let dup = dedup_prefix_overlap(&prefix_tail, &generated);
+                if dup > 0 { generated = generated[dup..].to_string(); }
+
+                // Sanitize: remove any leading overlap with provided suffix to avoid echoing
+                let common_prefix_len = |a: &str, b: &str| -> usize {
+                    a.chars()
+                        .zip(b.chars())
+                        .take_while(|(x, y)| x == y)
+                        .map(|(c, _)| c.len_utf8())
+                        .sum()
+                };
+                let overlap = common_prefix_len(&generated, &suffix);
+                let generated = if overlap > 0 {
+                    generated[overlap..].to_string()
+                } else {
+                    generated
+                };
+
+                // Additional dedupe: remove internal echoes of verbatim context
+                let mut candidates: std::collections::HashSet<String> = std::collections::HashSet::new();
+                // Long tail of prefix
+                if !prefix.is_empty() {
+                    let mut tail = String::new();
+                    let mut count = 0usize;
+                    for ch in prefix.chars().rev() {
+                        if count >= 200 { break; }
+                        tail.insert(0, ch);
+                        count += 1;
+                    }
+                    if tail.trim().len() >= 40 { candidates.insert(tail); }
+                    for line in prefix.lines() {
+                        let l = line.trim_end();
+                        if l.len() >= 40 { candidates.insert(l.to_string()); }
+                    }
+                }
+                // Head of suffix
+                if !suffix.is_empty() {
+                    let mut head = String::new();
+                    let mut count = 0usize;
+                    for ch in suffix.chars() {
+                        if count >= 200 { break; }
+                        head.push(ch);
+                        count += 1;
+                    }
+                    if head.trim().len() >= 40 { candidates.insert(head); }
+                    for line in suffix.lines() {
+                        let l = line.trim_end();
+                        if l.len() >= 40 { candidates.insert(l.to_string()); }
+                    }
+                }
+                let mut generated = generated;
+                for cand in candidates.into_iter() {
+                    if !cand.is_empty() && generated.contains(&cand) {
+                        generated = generated.replace(&cand, "");
+                    }
+                }
+
+                if !generated.trim().is_empty() {
+                    completion = generated;
+                    break;
+                }
             }
 
             if completion.trim().is_empty() {
                 let elapsed = started_at.elapsed();
                 debug!(
-                    "LM EditPred: empty completion model={} elapsed_ms={}",
+                    "LM EditPred: empty completion after {} attempts model={} elapsed_ms={}",
+                    attempts,
                     model_id,
                     elapsed.as_millis()
                 );

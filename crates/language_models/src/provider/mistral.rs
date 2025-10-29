@@ -1080,6 +1080,7 @@ mod tests {
             intent: None,
             mode: None,
             stop: vec![],
+            infill: None,
             thinking_allowed: true,
         };
 
@@ -1113,6 +1114,7 @@ mod tests {
             intent: None,
             mode: None,
             stop: vec![],
+            infill: None,
             thinking_allowed: true,
         };
 

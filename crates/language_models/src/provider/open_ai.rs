@@ -897,6 +897,7 @@ mod tests {
             tool_choice: None,
             stop: vec![],
             temperature: None,
+            infill: None,
             thinking_allowed: true,
         };
 

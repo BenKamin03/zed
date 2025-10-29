@@ -1836,6 +1836,7 @@ impl Thread {
             tool_choice: None,
             stop: Vec::new(),
             temperature: AgentSettings::temperature_for_model(model, cx),
+            infill: None,
             thinking_allowed: true,
         };
 

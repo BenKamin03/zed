@@ -1011,6 +1011,7 @@ mod tests {
             temperature: None,
             tools: vec![],
             tool_choice: None,
+            infill: None,
             thinking_allowed: true,
         };
 

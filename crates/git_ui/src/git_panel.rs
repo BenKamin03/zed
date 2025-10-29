@@ -1905,6 +1905,7 @@ impl GitPanel {
                     tool_choice: None,
                     stop: Vec::new(),
                     temperature,
+                    infill: None,
                     thinking_allowed: false,
                 };
 

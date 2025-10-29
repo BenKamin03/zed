@@ -128,6 +128,18 @@ pub struct LanguageModelEditPredictionSettingsContent {
     pub max_tokens: Option<u32>,
     /// Stop sequences the model should not cross.
     pub stop: Option<Vec<String>>,
+    /// Number of lines of current-space context to include around the cursor.
+    /// If the file exceeds this size, a centered window is used.
+    pub current_space_window_lines: Option<u32>,
+    /// Number of recent cross-file edit snippets to include in context.
+    /// Each snippet is a coalesced block of adjacent/overlapping edited lines.
+    pub recent_edits_max_snippets: Option<u32>,
+    /// Prefer provider-native infill when available; falls back to generic prompting otherwise.
+    /// Default: true
+    pub prefer_native_infill: Option<bool>,
+    /// Total attempts to make when the model returns an empty completion.
+    /// Interpreted as total attempts including the first. Set to 1 to disable retries.
+    pub empty_completion_total_attempts: Option<u32>,
 }
 
 #[skip_serializing_none]

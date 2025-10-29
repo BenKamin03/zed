@@ -19,6 +19,7 @@ const DEFAULT_SHARED_STRING: SharedString = SharedString::new_static("");
 /// to avoid the "NO DEFAULT" case.
 const DEFAULT_EMPTY_SHARED_STRING: Option<&SharedString> = Some(&DEFAULT_SHARED_STRING);
 
+
 pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     vec![
         SettingsPage {
@@ -5770,7 +5771,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
                                 description: "Model used when provider is set to Custom.",
                                 field: Box::new(
                                     SettingField::<()> {
-                                        json_path: Some(LM_MODEL_JSON_PATH),
+                                        json_path: Some("edit_predictions.language_model.model"),
                                         pick: |_settings_content| -> Option<&()> { None },
                                         write: |_settings_content, _value: Option<()>| {},
                                     }
@@ -5783,7 +5784,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
                                 title: "Temperature",
                                 description: "Sampling temperature for the language model provider.",
                                 field: Box::new(SettingField {
-                                    json_path: Some(LM_TEMPERATURE_JSON_PATH),
+                                    json_path: Some("edit_predictions.language_model.temperature"),
                                     pick: |settings_content| {
                                         settings_content
                                             .project
@@ -5813,7 +5814,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
                                 title: "Max Tokens",
                                 description: "Maximum number of tokens to generate for predictions.",
                                 field: Box::new(SettingField {
-                                    json_path: Some(LM_MAX_TOKENS_JSON_PATH),
+                                    json_path: Some("edit_predictions.language_model.max_tokens"),
                                     pick: |settings_content| {
                                         settings_content
                                             .project
@@ -5834,6 +5835,96 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
                                             .language_model
                                             .get_or_insert_default()
                                             .max_tokens = value;
+                                    },
+                                }),
+                                metadata: None,
+                                files: USER,
+                            },
+                            SettingItem {
+                                title: "Current Space Window (lines)",
+                                description: "Number of current-file lines to include around the cursor.",
+                                field: Box::new(SettingField {
+                                    json_path: Some("edit_predictions.language_model.current_space_window_lines"),
+                                    pick: |settings_content| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .as_ref()?
+                                            .language_model
+                                            .as_ref()?
+                                            .current_space_window_lines
+                                            .as_ref()
+                                    },
+                                    write: |settings_content, value| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .get_or_insert_default()
+                                            .language_model
+                                            .get_or_insert_default()
+                                            .current_space_window_lines = value;
+                                    },
+                                }),
+                                metadata: None,
+                                files: USER,
+                            },
+                            SettingItem {
+                                title: "Recent Edits History (items)",
+                                description: "Number of recent cross-file edit snippets to include.",
+                                field: Box::new(SettingField {
+                                    json_path: Some("edit_predictions.language_model.recent_edits_max_snippets"),
+                                    pick: |settings_content| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .as_ref()?
+                                            .language_model
+                                            .as_ref()?
+                                            .recent_edits_max_snippets
+                                            .as_ref()
+                                    },
+                                    write: |settings_content, value| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .get_or_insert_default()
+                                            .language_model
+                                            .get_or_insert_default()
+                                            .recent_edits_max_snippets = value;
+                                    },
+                                }),
+                                metadata: None,
+                                files: USER,
+                            },
+                            SettingItem {
+                                title: "Empty Completion Total Attempts",
+                                description: "Total attempts when a prediction is empty. 1 disables retries.",
+                                field: Box::new(SettingField {
+                                    json_path: Some("edit_predictions.language_model.empty_completion_total_attempts"),
+                                    pick: |settings_content| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .as_ref()?
+                                            .language_model
+                                            .as_ref()?
+                                            .empty_completion_total_attempts
+                                            .as_ref()
+                                    },
+                                    write: |settings_content, value| {
+                                        settings_content
+                                            .project
+                                            .all_languages
+                                            .edit_predictions
+                                            .get_or_insert_default()
+                                            .language_model
+                                            .get_or_insert_default()
+                                            .empty_completion_total_attempts = value;
                                     },
                                 }),
                                 metadata: None,
@@ -5889,17 +5980,12 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     ]
 }
 
-const EDIT_PREDICTIONS_MODE_JSON_PATH: &str = "edit_predictions.mode";
-const LM_MODEL_JSON_PATH: &str = "edit_predictions.language_model.model";
-const LM_TEMPERATURE_JSON_PATH: &str = "edit_predictions.language_model.temperature";
-const LM_MAX_TOKENS_JSON_PATH: &str = "edit_predictions.language_model.max_tokens";
-
 fn edit_predictions_display_mode_item() -> SettingItem {
     SettingItem {
         title: "Display Mode",
         description: "When to show edit predictions inline.",
         field: Box::new(SettingField {
-            json_path: Some(EDIT_PREDICTIONS_MODE_JSON_PATH),
+            json_path: Some("edit_predictions.mode"),
             pick: |settings_content| {
                 settings_content
                     .project
@@ -5988,7 +6074,7 @@ mod tests {
             (settings::EditPredictionProvider::Supermaven, 2, 1),
             (settings::EditPredictionProvider::Zed, 3, 1),
             (settings::EditPredictionProvider::Codestral, 4, 1),
-            (settings::EditPredictionProvider::LanguageModel, 5, 4),
+            (settings::EditPredictionProvider::LanguageModel, 5, 5),
         ];
 
         for (provider, expected_index, expected_len) in cases.iter().copied() {

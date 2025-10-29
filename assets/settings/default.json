@@ -1329,6 +1329,24 @@
       "model": null,
       "max_tokens": null
     },
+    // Generic language model provider defaults
+    "language_model": {
+      // Preferred model in the format "provider/model"; null uses registry default
+      "model": null,
+      // Sampling temperature (0.0 - 1.0)
+      "temperature": 0.15,
+      // Maximum number of tokens to generate
+      "max_tokens": 200,
+      // Stop sequences (null for none)
+      "stop": null,
+      // Number of current-space lines to include around the cursor
+      "current_space_window_lines": 30,
+      // Number of recent cross-file edit snippets to include
+      "recent_edits_max_snippets": 10,
+      // Total attempts when a prediction is empty. Includes the first attempt.
+      // Set to 1 to disable retries.
+      "empty_completion_total_attempts": 3
+    },
     // Whether edit predictions are enabled when editing text threads.
     // This setting has no effect if globally disabled.
     "enabled_in_text_threads": true

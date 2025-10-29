@@ -6198,14 +6198,22 @@ impl LspStore {
         if completion.label.filter_text() == new_label.filter_text() {
             completion.label = new_label;
         } else {
-            log::error!(
-                "Resolved completion changed display label from {} to {}. \
-                 Refusing to apply this because it changes the fuzzy match text from {} to {}",
-                completion.label.text(),
-                new_label.text(),
-                completion.label.filter_text(),
-                new_label.filter_text()
-            );
+            // Preserve the original fuzzy-match text by respanning the new label's filter range
+            // to the original filter text when possible. This allows servers to enrich labels on
+            // resolve (e.g., TypeScript adding "interface ..." details) without breaking matching.
+            let original_filter = completion.label.filter_text().to_string();
+            if let Some(start_ix) = new_label.text.find(&original_filter) {
+                let end_ix = start_ix + original_filter.len();
+                let rebuilt = CodeLabel::new(new_label.text.clone(), start_ix..end_ix, new_label.runs.clone());
+                completion.label = rebuilt;
+            } else {
+                log::warn!(
+                    "Resolved completion changed display label from {} to {}, and the original fuzzy match text '{}' wasn't found in the new label. Keeping the original label.",
+                    completion.label.text(),
+                    new_label.text(),
+                    original_filter
+                );
+            }
         }
 
         Ok(())

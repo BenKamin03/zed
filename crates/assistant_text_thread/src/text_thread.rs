@@ -2294,6 +2294,7 @@ impl TextThread {
             tool_choice: None,
             stop: Vec::new(),
             temperature: model.and_then(|model| AgentSettings::temperature_for_model(model, cx)),
+            infill: None,
             thinking_allowed: true,
         };
         for message in self.messages(cx) {

@@ -853,6 +853,7 @@ fn into_copilot_responses(
         stop: _,
         temperature,
         thinking_allowed: _,
+        infill: _,
     } = request;
 
     let mut input_items: Vec<responses::ResponseInputItem> = Vec::new();

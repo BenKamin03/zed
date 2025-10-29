@@ -1074,6 +1074,7 @@ impl RulesLibrary {
                                     tool_choice: None,
                                     stop: Vec::new(),
                                     temperature: None,
+                                    infill: None,
                                     thinking_allowed: true,
                                 },
                                 cx,

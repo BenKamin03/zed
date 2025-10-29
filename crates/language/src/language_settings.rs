@@ -436,6 +436,14 @@ pub struct LanguageModelProviderSettings {
     pub max_tokens: Option<u32>,
     /// Stop sequences to pass to the model.
     pub stop: Option<Vec<String>>,
+    /// Number of lines of current-space context to include around the cursor.
+    pub current_space_window_lines: Option<u32>,
+    /// Number of recent cross-file edit snippets to include in context.
+    pub recent_edits_max_snippets: Option<u32>,
+    /// Prefer provider-native infill when available.
+    pub prefer_native_infill: Option<bool>,
+    /// Total attempts when completion is empty (includes first attempt). 1 disables retries.
+    pub empty_completion_total_attempts: Option<u32>,
 }
 
 impl AllLanguageSettings {
@@ -663,6 +671,11 @@ impl settings::Settings for AllLanguageSettings {
             temperature: language_model_settings.temperature,
             max_tokens: language_model_settings.max_tokens,
             stop: language_model_settings.stop,
+            current_space_window_lines: language_model_settings.current_space_window_lines,
+            recent_edits_max_snippets: language_model_settings.recent_edits_max_snippets,
+            prefer_native_infill: language_model_settings.prefer_native_infill,
+            empty_completion_total_attempts: language_model_settings
+                .empty_completion_total_attempts,
         };
 
         let enabled_in_text_threads = edit_predictions.enabled_in_text_threads.unwrap();

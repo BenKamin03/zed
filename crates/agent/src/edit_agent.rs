@@ -728,6 +728,7 @@ impl EditAgent {
             tools,
             stop: Vec::new(),
             temperature: None,
+            infill: None,
             thinking_allowed: true,
         };
 

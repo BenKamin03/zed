@@ -3502,9 +3502,24 @@ fn render_number_field<T: NumberFieldType + Send + Sync>(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let (_, value) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
-    let value = value.copied().unwrap_or_else(T::min_value);
-    NumberField::new("numeric_stepper", value, window, cx)
+    let (_, value_opt) = SettingsStore::global(cx).get_value_from_file(file.to_settings(), field.pick);
+
+    let value = value_opt.copied().unwrap_or_else(T::min_value);
+    let mut number_field = NumberField::new("numeric_stepper", value, window, cx);
+
+    if let Some(path) = field.json_path {
+        if path == "edit_predictions.language_model.temperature" {
+            if let (Ok(min), Ok(max), Ok(step)) = (
+                T::from_str("0.0"),
+                T::from_str("1.0"),
+                T::from_str("0.05"),
+            ) {
+                number_field = number_field.min(min).max(max).normal_step(step).small_step(step).large_step(step);
+            }
+        }
+    }
+
+    number_field
         .on_change({
             move |value, _window, cx| {
                 let value = *value;
